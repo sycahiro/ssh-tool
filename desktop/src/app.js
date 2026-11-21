@@ -1365,32 +1365,47 @@ async function submitServerModal() {
   };
 
   setModalBusy(true);
-  if (i >= 0) {
-    Object.assign(servers[i], data);
-    for (const s of sessions) if (s.server && s.server.id === data.id) s.server = servers[i];
-  } else {
-    servers.push(data);
+  try {
+    const i = servers.findIndex((s) => s.id === data.id);
+    if (i >= 0) {
+      Object.assign(servers[i], data);
+      for (const s of sessions) if (s.server && s.server.id === data.id) s.server = servers[i];
+    } else {
+      servers.push(data);
+    }
+    await saveServers();
+    serverModalEl.classList.add('hidden');
+    modalServer = null;
+  } catch (e) {
+    const err = $('m-error');
+    err.textContent = '保存失败：' + (e?.message || e);
+    err.classList.remove('hidden');
+  } finally {
+    // 无论成功失败都要恢复按钮，否则会一直卡在「保存中…」
+    setModalBusy(false);
   }
-
-  await saveServers();
-  setModalBusy(false);
-  serverModalEl.classList.add('hidden');
-  modalServer = null;
 }
 
 async function removeServer(srv) {
+  const prev = servers;
   servers = servers.filter((s) => s.id !== srv.id);
-  await saveServers();
+  try {
+    await saveServers();
+  } catch (e) {
+    servers = prev; // 写盘失败就回滚，避免界面显示删了、文件里还在
+    renderAll();
+    renderServerRows();
+    alert('删除失败：' + (e?.message || e));
+  }
 }
 
 /// 服务器配置实时写盘：写入 exe 同级的 ssh-tool.json
+/// 写盘失败会抛出，由调用方提示用户（以前静默吞掉，用户以为存上了其实没存）
 async function saveServers() {
   // 服务器配置变了（系统类型/地址），之前探测的家目录和位置列表可能不再成立
   remoteHomes.clear();
   remotePlaceCache.clear();
-  if (tauriAvailable) {
-    try { await invoke('servers_save', { servers }); } catch {}
-  }
+  if (tauriAvailable) await invoke('servers_save', { servers });
   renderAll();
   renderServerRows();
 }
