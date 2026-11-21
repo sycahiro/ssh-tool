@@ -1,0 +1,14 @@
+# Rust 构建产物
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+
+# 截图 / 调试脚本（仅本机用）
+/desktop/.shots/
+
+# 早期原型（自带嵌套 .git，单独管理）
+/_archive/
+
+# 本机配置与杂项
+.DS_Store
+Thumbs.db
+*.log

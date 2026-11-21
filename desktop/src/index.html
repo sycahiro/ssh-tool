@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>SSH Tool</title>
+<link rel="stylesheet" href="./vendor/xterm.css" />
+<link rel="stylesheet" href="./style.css" />
+<script src="./vendor/xterm.js"></script>
+<script src="./vendor/addon-fit.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-logo"><img src="./app.svg" alt="" width="22" height="22" /></span>
+        <span class="brand-text">
+          <strong>SSH Tool</strong>
+          <small>终端与文件传输</small>
+        </span>
+      </div>
+
+      <nav class="side-nav">
+        <section class="nav-group">
+          <div class="nav-label">本机</div>
+          <div id="local-list"></div>
+          <div class="nav-add-row">
+            <button class="nav-add" id="btn-local-ps">
+              <img src="./icons/powershell.svg" alt="" width="14" height="14" />PowerShell
+            </button>
+            <button class="nav-add" id="btn-local-cmd">
+              <img src="./icons/terminal.svg" alt="" width="14" height="14" />CMD
+            </button>
+          </div>
+        </section>
+        <section class="nav-group">
+          <div class="nav-label">服务器</div>
+          <div id="server-list"></div>
+        </section>
+      </nav>
+
+      <div class="side-footer">
+        <div class="side-status">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="side-status-text">
+            <small>当前会话</small>
+            <span id="status-text">就绪</span>
+          </span>
+        </div>
+        <button class="side-manage" id="btn-settings">
+          <img src="./icons/sliders.svg" alt="" width="14" height="14" />设置
+        </button>
+        <button class="side-manage" id="btn-about">
+          <img src="./icons/info.svg" alt="" width="14" height="14" />关于
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="tabs" id="tabs"></div>
+        <button class="tab-add" id="btn-tab-add" title="新建终端 (Ctrl+T)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
+        </button>
+        <div class="topbar-spacer"></div>
+      </header>
+      <div class="new-menu hidden" id="new-menu"></div>
+
+      <div class="stage">
+        <div class="terminals" id="terminals"></div>
+
+        <div class="welcome" id="welcome">
+          <span class="welcome-logo"><img src="./app.svg" alt="" width="28" height="28" /></span>
+          <h2>开始使用 SSH Tool</h2>
+          <p>在左侧「本机」新建终端，或点击「服务器」打开 SSH 终端。</p>
+        </div>
+
+        <!-- 设置视图 -->
+        <div class="settings hidden" id="settings">
+          <div class="settings-inner">
+            <div class="settings-page">
+              <div class="page-heading">
+                <h1>设置</h1>
+                <p class="page-caption">服务器凭据与终端外观都保存在本机，不会上传。</p>
+              </div>
+
+              <div class="settings-cols">
+                <section class="settings-col">
+                  <div class="col-head">
+                    <div>
+                      <h2>服务器</h2>
+                      <p class="col-caption">点击左侧服务器打开 SSH 标签；服务器行右侧的箭头图标可打开文件传输。</p>
+                    </div>
+                    <button class="btn" id="btn-server-add">
+                      <img class="toolicon" src="./icons/plus.svg" alt="" />添加服务器
+                    </button>
+                  </div>
+                  <div id="server-rows"></div>
+                </section>
+
+                <section class="settings-col">
+                  <div class="col-head">
+                    <div>
+                      <h2>外观</h2>
+                      <p class="col-caption">仅影响终端区域，应用界面保持浅色。</p>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <span>终端字体</span>
+                    <button class="font-picker" id="font-picker" type="button">
+                      <span class="fp-name" id="font-picker-name">Consolas</span>
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 8 10.5 12 6.5" /></svg>
+                    </button>
+                  </div>
+                  <label class="field">
+                    <span>字号</span>
+                    <input type="range" id="font-size" min="11" max="22" step="1" />
+                    <b id="font-size-val">14</b>
+                  </label>
+                  <div class="font-preview" id="font-preview">ABCabc123 你好世界 $&gt;_ λ μ</div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 关于视图 -->
+        <div class="settings hidden" id="about">
+          <div class="settings-inner">
+            <div class="settings-page">
+              <div class="page-heading">
+                <h1>关于</h1>
+                <p class="page-caption">一个 Windows 上的轻量 SSH 终端与文件传输客户端。</p>
+              </div>
+
+              <div class="settings-cols">
+                <section class="settings-col about-card">
+                  <div class="about-brand">
+                    <span class="about-logo"><img src="./app.svg" alt="" width="28" height="28" /></span>
+                    <div>
+                      <h2>SSH Tool</h2>
+                      <p class="about-version">版本 <span id="about-version">0.1.0</span> · Windows</p>
+                    </div>
+                  </div>
+                  <p class="about-desc">
+                    支持连接 Linux、macOS、Windows 三类目标主机，内置终端与双栏文件传输。
+                    服务器配置和密码只保存在本机，不会上传到任何服务。
+                  </p>
+                  <a class="about-link" id="about-repo" href="https://github.com/" target="_blank" rel="noreferrer">
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+                    <span id="about-repo-text">github.com</span>
+                  </a>
+                </section>
+
+                <section class="settings-col">
+                  <div class="col-head">
+                    <div>
+                      <h2>技术栈与许可</h2>
+                      <p class="col-caption">本项目基于以下开源组件构建。</p>
+                    </div>
+                  </div>
+                  <ul class="about-deps">
+                    <li><b>Tauri 2</b><span>MIT / Apache-2.0</span></li>
+                    <li><b>xterm.js</b><span>MIT</span></li>
+                    <li><b>portable-pty</b><span>MIT</span></li>
+                    <li><b>Material Icon Theme</b><span>MIT</span></li>
+                  </ul>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 添加 / 编辑服务器的小弹窗 -->
+  <div class="modal hidden" id="server-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="server-modal-title">
+      <div class="modal-head">
+        <h3 id="server-modal-title">添加服务器</h3>
+        <p>密码只保存在本机，不会上传。</p>
+      </div>
+      <div class="modal-body">
+        <label class="mfield">
+          <span>名称</span>
+          <input id="m-name" type="text" autocomplete="off" />
+        </label>
+        <div class="mrow">
+          <label class="mfield grow">
+            <span>主机</span>
+            <input id="m-host" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="mfield port">
+            <span>端口</span>
+            <input id="m-port" type="text" inputmode="numeric" autocomplete="off" />
+          </label>
+        </div>
+        <div class="mrow">
+          <label class="mfield grow">
+            <span>用户名</span>
+            <input id="m-user" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="mfield grow">
+            <span>密码</span>
+            <input id="m-password" type="password" autocomplete="off" />
+          </label>
+        </div>
+        <label class="mfield">
+          <span>系统</span>
+          <select id="m-os">
+            <option value="linux">Linux</option>
+            <option value="macos">macOS</option>
+            <option value="windows">Windows</option>
+          </select>
+        </label>
+        <p class="modal-error hidden" id="m-error"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="m-cancel">取消</button>
+        <button class="btn btn-primary" id="m-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 文件传输弹窗：与添加服务器同一套弹窗外壳，内容是本机 ⇄ 该服务器的双栏 -->
+  <div class="modal hidden" id="transfer-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card modal-wide" role="dialog" aria-modal="true" aria-labelledby="transfer-title" tabindex="-1">
+      <div class="modal-head transfer-head">
+        <div>
+          <h3 id="transfer-title">文件传输</h3>
+          <p id="transfer-sub">本机 ⇄ 服务器</p>
+        </div>
+        <button class="modal-close" id="transfer-close" title="关闭 (Esc)">✕</button>
+      </div>
+
+      <div class="file-header">
+        <div class="device-badge">
+          <img class="dev-icon" src="./icons/laptop.svg" alt="" />
+          <div class="dev-text">
+            <span class="dev-name">本机</span>
+            <span class="dev-sub">Windows</span>
+          </div>
+        </div>
+
+        <div class="send-btns">
+          <button class="send-btn" id="btn-send-right" title="发送到服务器">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </button>
+          <button class="send-btn" id="btn-send-left" title="下载到本机">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+          </button>
+        </div>
+
+        <div class="device-badge">
+          <img class="dev-icon" src="./icons/monitor.svg" alt="" />
+          <div class="dev-text">
+            <span class="dev-name" id="badge-remote-name">服务器</span>
+            <span class="dev-sub" id="badge-remote-sub"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panes">
+        <div class="pane" id="pane-local">
+          <div class="pane-toolbar">
+            <button class="tool-btn" data-nav="back" title="后退"><img src="./icons/back.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="up" title="上一层"><img src="./icons/up.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="refresh" title="刷新"><img src="./icons/refresh.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="mkdir" title="新建文件夹"><img src="./icons/newfolder.svg" alt="" /></button>
+            <button class="path-field" id="path-local" type="button">
+              <img class="path-icon" src="./icons/folder-open.svg" alt="" />
+              <span class="path-text" id="path-local-text">此电脑</span>
+              <svg class="path-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 8 10.5 12 6.5" /></svg>
+            </button>
+          </div>
+          <div class="file-table">
+            <div class="ftable-head">
+              <span class="col-check"><input type="checkbox" data-check-all /></span>
+              <span class="col-name">名称</span>
+              <span class="col-date">修改日期</span>
+              <span class="col-size">大小</span>
+            </div>
+            <div class="ftable-body" id="list-local"></div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-remote">
+          <div class="pane-toolbar">
+            <button class="tool-btn" data-nav="back" title="后退"><img src="./icons/back.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="up" title="上一层"><img src="./icons/up.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="refresh" title="刷新"><img src="./icons/refresh.svg" alt="" /></button>
+            <button class="tool-btn" data-nav="mkdir" title="新建文件夹"><img src="./icons/newfolder.svg" alt="" /></button>
+            <button class="path-field" id="path-remote" type="button">
+              <img class="path-icon" src="./icons/monitor.svg" alt="" />
+              <span class="path-text" id="path-remote-text">/</span>
+              <svg class="path-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 8 10.5 12 6.5" /></svg>
+            </button>
+          </div>
+          <div class="file-table">
+            <div class="ftable-head">
+              <span class="col-check"><input type="checkbox" data-check-all /></span>
+              <span class="col-name">名称</span>
+              <span class="col-date">修改日期</span>
+              <span class="col-size">大小</span>
+            </div>
+            <div class="ftable-body" id="list-remote"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="transfers">
+        <div class="transfers-head">
+          <span class="t-title">传输列表</span>
+          <div class="t-actions">
+            <button class="btn btn-mini" id="btn-clear-done">清除已完成</button>
+            <button class="btn btn-mini" id="btn-cancel-all">全部取消</button>
+          </div>
+        </div>
+        <div class="transfers-body" id="transfer-list">
+          <div class="t-empty">暂无传输任务</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 文件面板「位置」下拉 -->
+  <div class="popover hidden" id="path-menu"></div>
+
+  <!-- 字体选择弹层 -->
+  <div class="popover font-pop hidden" id="font-menu">
+    <div class="fp-search">
+      <img src="./icons/search.svg" alt="" width="13" height="13" />
+      <input id="font-search" type="text" placeholder="搜索本机字体…" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="fp-list" id="font-list"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
