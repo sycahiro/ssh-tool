@@ -5,6 +5,12 @@ mod pty;
 mod ssh;
 mod transfer;
 
+/// 应用版本：编译期从 Cargo.toml 读，避免和前端硬编码的版本号漂移。
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// 用系统默认浏览器打开外部链接。
 /// WebView 里 target="_blank" 会被拦掉，必须由宿主进程调 ShellExecute。
 #[tauri::command]
@@ -50,6 +56,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_version,
             open_external,
             pty::term_spawn,
             pty::term_write,

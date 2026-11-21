@@ -1064,12 +1064,15 @@ function openAbout() {
   showView('about');
 }
 
-// 关于页：版本从 tauri.conf.json 的 version 同步（打包时写入），仓库地址改这里即可
+// 关于页：版本号由后端从 Cargo.toml 读取，前端不再硬编码（避免两处版本漂移）
 const ABOUT = {
-  version: '0.1.0',
   repo: 'https://github.com/sycahiro/ssh-tool',
 };
-$('about-version').textContent = ABOUT.version;
+if (tauriAvailable) {
+  invoke('app_version')
+    .then((v) => { if (v) $('about-version').textContent = v; })
+    .catch(noop);
+}
 $('about-repo-text').textContent = ABOUT.repo.replace(/^https?:\/\//, '').replace(/\/$/, '');
 // WebView 里的 <a target="_blank"> 不会开系统浏览器，必须走后端打开
 $('about-repo').onclick = () => {

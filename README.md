@@ -45,4 +45,6 @@ desktop/
 
 ## 许可
 
+本项目采用 [MIT 许可](LICENSE)。
+
 第三方组件：Tauri 2（MIT / Apache-2.0）、xterm.js（MIT）、portable-pty（MIT）、Material Icon Theme（MIT）。
