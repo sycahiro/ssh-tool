@@ -1,7 +1,8 @@
 //! 服务器配置持久化 + 本地/远程文件浏览 + 传输取消注册表。
 //!
-//! 配置存在 app data 目录的 servers.json（含密码，文件权限收紧；
-//! 后续可换系统凭据管理器）。
+//! 全部配置存在 exe 同级的单个 ssh-tool.json 里（服务器 + 界面设置），
+//! 便携：整个 exe 连同这个文件拷走即可。exe 所在目录不可写时
+//! （例如装在 Program Files）自动退回 app data 目录。
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -34,8 +35,23 @@ fn default_port() -> u16 {
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 struct Store {
     servers: Vec<ServerConfig>,
+    /// 终端字体族
+    font: String,
+    /// 终端字号
+    font_size: u16,
+    /// 上次浏览的本机目录
+    local_path: String,
+}
+
+/// 界面设置（字体、字号、上次的本机目录），与服务器配置存在同一个文件。
+#[derive(Serialize, Deserialize)]
+pub struct UiSettings {
+    pub font: String,
+    pub font_size: u16,
+    pub local_path: String,
 }
 
 static CANCELS: OnceLock<Mutex<HashMap<u32, Arc<AtomicBool>>>> = OnceLock::new();
@@ -98,22 +114,64 @@ pub fn take_cancel(id: u32) -> Option<Arc<AtomicBool>> {
     CANCELS.get()?.lock().unwrap().get(&id).cloned()
 }
 
+/// exe 同级目录（便携位置）。取不到就退回 app data 目录。
+fn portable_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    // 可写才用（装在 Program Files 等受保护位置时写不进去）
+    let probe = dir.join(".ssh-tool-write-test");
+    if std::fs::write(&probe, b"x").is_ok() {
+        let _ = std::fs::remove_file(&probe);
+        Some(dir)
+    } else {
+        None
+    }
+}
+
 fn store_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    if let Some(dir) = portable_dir() {
+        return Ok(dir.join("ssh-tool.json"));
+    }
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("servers.json"))
+    Ok(dir.join("ssh-tool.json"))
 }
 
 fn load(app: &tauri::AppHandle) -> Result<Store, String> {
     let path = store_path(app)?;
     if let Ok(text) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&text).map_err(|e| e.to_string())
-    } else {
-        Ok(Store::default())
+        return serde_json::from_str(&text).map_err(|e| e.to_string());
     }
+    // 首次运行：把旧版 app data 里的 servers.json 迁移过来
+    migrate_legacy(app)
+}
+
+/// 旧版把服务器存在 app data 的 servers.json 里，读到就搬进新的单文件。
+fn migrate_legacy(app: &tauri::AppHandle) -> Result<Store, String> {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return Ok(Store::default());
+    };
+    let old = dir.join("servers.json");
+    let Ok(text) = std::fs::read_to_string(&old) else {
+        return Ok(Store::default());
+    };
+    #[derive(Deserialize)]
+    struct Legacy {
+        servers: Vec<ServerConfig>,
+    }
+    let store = match serde_json::from_str::<Legacy>(&text) {
+        Ok(l) => Store {
+            servers: l.servers,
+            ..Default::default()
+        },
+        Err(_) => Store::default(),
+    };
+    // 迁移成功后写进新位置，旧文件留着不删（用户可能还要回退）
+    let _ = save(app, &store);
+    Ok(store)
 }
 
 fn save(app: &tauri::AppHandle, store: &Store) -> Result<(), String> {
@@ -163,10 +221,32 @@ pub fn servers_list(app: tauri::AppHandle) -> Result<Vec<ServerConfig>, String> 
 
 #[tauri::command]
 pub fn servers_save(app: tauri::AppHandle, servers: Vec<ServerConfig>) -> Result<(), String> {
-    let store = Store { servers };
+    let mut store = load(&app)?;
+    store.servers = servers;
     save(&app, &store)?;
     *STORE_CACHE.get_or_init(Default::default).lock().unwrap() = store;
     Ok(())
+}
+
+/// 读界面设置（字体、字号、上次本机目录）。
+#[tauri::command]
+pub fn ui_settings(app: tauri::AppHandle) -> Result<UiSettings, String> {
+    let s = load(&app)?;
+    Ok(UiSettings {
+        font: s.font,
+        font_size: s.font_size,
+        local_path: s.local_path,
+    })
+}
+
+/// 实时保存界面设置（设置页没有保存按钮）。
+#[tauri::command]
+pub fn ui_settings_save(app: tauri::AppHandle, settings: UiSettings) -> Result<(), String> {
+    let mut store = load(&app)?;
+    store.font = settings.font;
+    store.font_size = settings.font_size;
+    store.local_path = settings.local_path;
+    save(&app, &store)
 }
 
 #[derive(Serialize)]

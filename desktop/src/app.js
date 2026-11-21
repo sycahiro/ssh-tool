@@ -71,11 +71,41 @@ function fontStack(raw) {
   return `${quoted}, Consolas, monospace`;
 }
 
+// 所有配置（服务器 + 字体 + 字号 + 上次本机目录）都存在 exe 同级的
+// ssh-tool.json 里，由后端读写；启动时 loadSettings() 拉一次。
 const settings = {
-  font: normalizeFont(localStorage.getItem('font')),
-  fontSize: parseInt(localStorage.getItem('fontSize') || '14', 10),
+  font: 'Consolas',
+  fontSize: 14,
+  localPath: '',
   view: 'term',
 };
+
+/// 把当前设置写回 ssh-tool.json（设置页实时保存，没有保存按钮）
+function saveUiSettings() {
+  if (!tauriAvailable) return;
+  invoke('ui_settings_save', {
+    settings: {
+      font: settings.font,
+      font_size: settings.fontSize,
+      local_path: settings.localPath,
+    },
+  }).catch(noop);
+}
+
+async function loadSettings() {
+  if (!tauriAvailable) return;
+  try {
+    const s = await invoke('ui_settings');
+    if (s) {
+      settings.font = normalizeFont(s.font);
+      const size = parseInt(s.font_size, 10);
+      if (size >= 11 && size <= 22) settings.fontSize = size;
+      settings.localPath = s.local_path || '';
+      // 首次运行（文件里还没有这些字段）把默认值落盘，之后直接读
+      if (!s.font || !s.font_size) saveUiSettings();
+    }
+  } catch {}
+}
 
 // ---------- 状态 ----------
 let sessions = []; // {id, title, term, el, fit, alive, kind: 'local'|'ssh', server}
@@ -499,7 +529,7 @@ async function openTransfer(server) {
   $('badge-remote-name').textContent = server.name || server.host;
   $('badge-remote-sub').textContent = `${server.user}@${server.host}`;
 
-  if (!localPane.path) localPane.path = normalizeLocalPath(localStorage.getItem('localPath') || '');
+  if (!localPane.path) localPane.path = normalizeLocalPath(settings.localPath || '');
   localPane.fallbackTried = false;
   const switched = remotePane.serverId !== server.id;
   remotePane.serverId = server.id;
@@ -562,7 +592,10 @@ async function loadLocalPane() {
     localPane.error = res.error;
     localPane.sel.clear();
     // 只有读成功的路径才记住：失败路径存下去会让下次打开也打不开
-    if (!res.error) localStorage.setItem('localPath', localPane.path);
+    if (!res.error) {
+      settings.localPath = localPane.path;
+      saveUiSettings();
+    }
   } catch (e) {
     localPane.error = String(e);
     localPane.entries = [];
@@ -1037,8 +1070,12 @@ const ABOUT = {
   repo: 'https://github.com/sycahiro/ssh-tool',
 };
 $('about-version').textContent = ABOUT.version;
-$('about-repo').href = ABOUT.repo;
 $('about-repo-text').textContent = ABOUT.repo.replace(/^https?:\/\//, '').replace(/\/$/, '');
+// WebView 里的 <a target="_blank"> 不会开系统浏览器，必须走后端打开
+$('about-repo').onclick = () => {
+  if (tauriAvailable) invoke('open_external', { url: ABOUT.repo }).catch(noop);
+  else window.open(ABOUT.repo, '_blank', 'noreferrer');
+};
 
 let installedFonts = [];
 
@@ -1122,7 +1159,7 @@ function renderFontList(keyword = '') {
 function pickFont(name) {
   settings.font = normalizeFont(name);
   $('font-picker-name').textContent = settings.font;
-  localStorage.setItem('font', settings.font);
+  saveUiSettings();
   updateFontPreview();
   applyFontToAll();
   hideFontMenu();
@@ -1346,12 +1383,11 @@ async function removeServer(srv) {
   await saveServers();
 }
 
-/// 服务器配置实时写盘：localStorage 兜底 + 后端 servers.json
+/// 服务器配置实时写盘：写入 exe 同级的 ssh-tool.json
 async function saveServers() {
   // 服务器配置变了（系统类型/地址），之前探测的家目录和位置列表可能不再成立
   remoteHomes.clear();
   remotePlaceCache.clear();
-  localStorage.setItem('servers', JSON.stringify(servers));
   if (tauriAvailable) {
     try { await invoke('servers_save', { servers }); } catch {}
   }
@@ -1380,7 +1416,7 @@ $('font-size').oninput = () => {
   const size = parseInt($('font-size').value, 10);
   settings.fontSize = size;
   $('font-size-val').textContent = size;
-  localStorage.setItem('fontSize', String(size));
+  saveUiSettings();
   updateFontPreview();
   applyFontToAll();
 };
@@ -1474,14 +1510,10 @@ $('btn-local-cmd').onclick = () => newLocalSession('cmd');
 async function loadServers() {
   if (!tauriAvailable) return;
   try {
-    const list = await invoke('servers_list');
-    if (list && list.length) {
-      servers = list;
-      localStorage.setItem('servers', JSON.stringify(servers));
-      return;
-    }
-  } catch {}
-  try { servers = JSON.parse(localStorage.getItem('servers') || '[]'); } catch { servers = []; }
+    servers = (await invoke('servers_list')) || [];
+  } catch {
+    servers = [];
+  }
 }
 
 if (tauriAvailable) {
@@ -1523,5 +1555,12 @@ window.addEventListener('resize', () => {
 });
 
 // ---------- 启动 ----------
-loadServers().then(renderAll);
+// 先读设置再读服务器，两个都到齐后一次性渲染（避免先按默认字体画一遍）
+Promise.all([loadSettings(), loadServers()]).then(() => {
+  $('font-picker-name').textContent = settings.font;
+  $('font-size').value = settings.fontSize;
+  $('font-size-val').textContent = settings.fontSize;
+  updateFontPreview();
+  renderAll();
+});
 updateWelcome();

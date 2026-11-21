@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1    # 发布构建，产物�
 - **多目标系统**：可连接 Linux、macOS、Windows 三类主机，远端列目录命令按所选系统切换。
 - **终端**：基于 xterm.js，支持多标签、SSH 密码登录与本机 PowerShell / CMD。
 - **文件传输**：左侧本机、右侧服务器双栏浏览，勾选后左右互传；远端默认落在当前用户家目录。
-- **本机存储**：服务器配置与密码只写入本机的 `servers.json`，不上传任何服务，也没有账号或令牌。
+- **便携存储**：所有配置（服务器、密码、字体、字号、上次目录）写进 exe 同级的单个 `ssh-tool.json`，不上传任何服务，也没有账号或令牌。把 exe 和这个文件一起拷走就完成了迁移；exe 所在目录不可写时（例如装在 `Program Files`）自动改用 `%APPDATA%\com.wywan.ssh-tool\`。
 - **外观**：终端字体取本机已安装字体，字号可调，设置实时生效、无需保存。
 
 ## 环境要求

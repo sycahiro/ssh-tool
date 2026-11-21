@@ -5,6 +5,9 @@
 # 发布产物
 /dist/
 
+# 运行时配置（含密码，绝不入库）
+ssh-tool.json
+
 # 本机配置与杂项
 .DS_Store
 Thumbs.db
