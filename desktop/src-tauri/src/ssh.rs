@@ -212,3 +212,41 @@ pub fn run_remote(server: &Server, command: &str) -> Result<String, String> {
     }
     Ok(stdout)
 }
+
+/// 删除本机 known_hosts 里这台服务器的指纹。
+///
+/// 连接用的是 `StrictHostKeyChecking=accept-new`：第一次连会把这台的
+/// 主机公钥自动记进 `%USERPROFILE%\.ssh\known_hosts`，之后如果服务器
+/// 重装、换 IP 后面是另一台机器，指纹对不上，ssh 会直接拒绝连接。
+/// 那时必须先把旧指纹删掉，才能重新记录。
+#[tauri::command]
+pub fn forget_host_key(host: String, port: u16) -> Result<(), String> {
+    let host = host.trim().to_string();
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == ';' || c == '&' || c == '|')
+    {
+        return Err("服务器地址不合法".into());
+    }
+    // 非 22 端口的写法是 [host]:port
+    let mut targets = vec![host.clone()];
+    if port != 22 {
+        targets.push(format!("[{}]:{}", host, port));
+    }
+    for target in targets {
+        let mut cmd = std::process::Command::new("ssh-keygen");
+        cmd.args(["-R", &target])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        // ssh-keygen 找不到记录时会返回非 0，这不算错误（本来就没有）
+        cmd.status()
+            .map_err(|e| format!("无法启动 ssh-keygen: {e}"))?;
+    }
+    Ok(())
+}

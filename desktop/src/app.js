@@ -40,6 +40,46 @@ const b64decode = (str) => {
 };
 const $ = (id) => document.getElementById(id);
 const noop = () => {};
+
+/// 终端输入规范化：
+/// Windows 剪贴板的换行是 CRLF，xterm 会把它原样交给 onData，远端 bash/ConPTY
+/// 把 \r 和 \n 各当成一次回车，多行粘贴就变成每行执行两次、输出与回显交错。
+/// 所有发往 PTY 的数据都经过这里，换行统一折成单个 \r（终端里的回车）。
+function normalizeInput(data) {
+  return String(data || '').replace(/\r\n/g, '\r').replace(/\n/g, '\r');
+}
+
+/// 粘贴文本预处理：CRLF / CR 统一成 \n，再去掉结尾换行。
+/// 结尾不回车 = 最后一条命令留在输入行，由用户自己确认。
+function normalizePaste(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n+$/, '');
+}
+
+/// 等这个会话对刚发出的那一行做出反应（有回显/输出），且输出安静 60ms，
+/// 最多等 700ms。用于没有 bracketed paste 的远端逐行粘贴，避免回显和输出交错。
+function waitQuiet(session, sentAt) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (session.id < 0) return resolve();
+      const out = session.lastData || 0;
+      const quiet = Date.now() - Math.max(out, sentAt);
+      if ((out > sentAt && quiet >= 60) || Date.now() - start >= 700) resolve();
+      else setTimeout(tick, 20);
+    };
+    tick();
+  });
+}
+
+/// 远端是否开了 bracketed paste（bash 5.1+ 默认开；5.0 及更早不支持）。
+/// 该模式由远端应用通过 \e[?2004h 打开，xterm 记在 coreService 里。
+function remoteBracketsPaste(term) {
+  try {
+    return !!term._core.coreService.decPrivateModes.bracketedPasteMode;
+  } catch (e) {
+    return false;
+  }
+}
 const fmtSize = (n) => {
   if (!n) return '';
   if (n < 1024) return n + ' B';
@@ -150,6 +190,9 @@ function attachAppKeys(term, session) {
     const mod = ev.ctrlKey || ev.metaKey;
     if (!mod) return true;
     const k = ev.key.toLowerCase();
+    // Ctrl+V：xterm 默认会把它当控制字符 ^V 发给远端，这里放行，
+    // 让浏览器自己触发 paste 事件（内容再经 normalizeInput 折成单个回车）。
+    if (k === 'v' && !ev.shiftKey && !ev.altKey) return false;
     if (k === 't') { ev.preventDefault(); newLocalSession(); return false; }
     if (k === 'w') { ev.preventDefault(); closeSession(session); return false; }
     if (k === 'e' && session.kind === 'ssh' && session.server) {
@@ -159,6 +202,58 @@ function attachAppKeys(term, session) {
     }
     return true;
   });
+}
+
+/// 粘贴：接管所有粘贴入口，全文规范化后再送进终端。
+/// 1) paste 事件：Ctrl+V / Shift+Insert / 系统菜单里的「粘贴」；
+/// 2) input 事件：拖放、原生编辑命令等直接往隐藏 textarea 里塞文字的路径。
+/// 浏览器有时把一次粘贴拆成多个事件，若逐个处理，CRLF 的 \r 和 \n 会被
+/// 拆成两次回车（每行执行两次、输出回显交错），所以必须在拆开之前规范化。
+function attachPaste(term, session) {
+  const writeChunk = (text) => {
+    if (session.id < 0) return;
+    invoke('term_write', { id: session.id, data: b64encode(encoder.encode(text)) }).catch(noop);
+  };
+  const send = (text) => {
+    const clean = normalizePaste(text);
+    if (!clean || session.id < 0) return;
+    if (remoteBracketsPaste(term)) {
+      // 远端开了 bracketed paste：整段交给 xterm，它包上 \e[200~…\e[201~，
+      // 远端只插入不执行，不会被命令输出打乱。
+      term.paste(clean);
+      return;
+    }
+    // 远端不支持 bracketed paste（bash 5.0 及更早）：逐行发，并且等上一行
+    // 的回显/输出安静下来再发下一行。整段一次写入时 TTY 会立刻回显全部输入，
+    // 和逐条命令的输出搅成一团，就是用户看到的「重叠」。
+    const lines = clean.split('\n');
+    (async () => {
+      for (let i = 0; i < lines.length; i++) {
+        if (session.id < 0) return;
+        const at = Date.now();
+        writeChunk(i < lines.length - 1 ? lines[i] + '\r' : lines[i]);
+        if (i < lines.length - 1) await waitQuiet(session, at);
+      }
+    })();
+  };
+
+  const ta = term.textarea;
+  ta.addEventListener('paste', (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    send(e.clipboardData ? e.clipboardData.getData('text') : '');
+  }, true);
+
+  ta.addEventListener('input', (e) => {
+    const raw = ta.value;
+    if (!raw) return;
+    // 只接管批量插入（粘贴/拖放）；普通按键和输入法交给 xterm
+    const bulk = String(e.inputType || '').startsWith('insertFrom') || /[\r\n]/.test(raw);
+    if (!bulk) return;
+    e.stopImmediatePropagation();
+    ta.value = '';
+    send(raw);
+  }, true);
 }
 
 /// shell: 'powershell' | 'cmd'
@@ -177,9 +272,10 @@ async function newLocalSession(shell = 'powershell') {
   const session = { id: -1, title, term, el: host, fit, alive: true, kind: 'local', shell, server: null };
   sessions.push(session);
   attachAppKeys(term, session);
+  attachPaste(term, session);
 
   term.onData((data) => {
-    if (session.id >= 0) invoke('term_write', { id: session.id, data: b64encode(encoder.encode(data)) }).catch(noop);
+    if (session.id >= 0) invoke('term_write', { id: session.id, data: b64encode(encoder.encode(normalizeInput(data))) }).catch(noop);
   });
   term.onResize(({ cols, rows }) => {
     if (session.id >= 0) invoke('term_resize', { id: session.id, cols, rows }).catch(noop);
@@ -225,9 +321,10 @@ async function openSshSession(server) {
   const session = { id: -1, title, term, el: host, fit, alive: true, kind: 'ssh', server };
   sessions.push(session);
   attachAppKeys(term, session);
+  attachPaste(term, session);
 
   term.onData((data) => {
-    if (session.id >= 0) invoke('term_write', { id: session.id, data: b64encode(encoder.encode(data)) }).catch(noop);
+    if (session.id >= 0) invoke('term_write', { id: session.id, data: b64encode(encoder.encode(normalizeInput(data))) }).catch(noop);
   });
   term.onResize(({ cols, rows }) => {
     if (session.id >= 0) invoke('term_resize', { id: session.id, cols, rows }).catch(noop);
@@ -321,6 +418,19 @@ const welcomeEl = $('welcome');
 const newMenuEl = $('new-menu');
 const btnTabAdd = $('btn-tab-add');
 
+const sideBodyEl = $('side-body');
+const navItems = {
+  term: $('btn-nav-term'),
+  settings: $('btn-nav-settings'),
+  about: $('btn-nav-about'),
+};
+
+/// 左栏主导航高亮 + 终端子栏（本机 / 服务器）只在终端视图显示
+function renderNav() {
+  for (const [k, el] of Object.entries(navItems)) el.classList.toggle('active', settings.view === k);
+  sideBodyEl.classList.toggle('hidden', settings.view !== 'term');
+}
+
 function showView(v) {
   settings.view = v;
   // 设置页 / 关于页是独立页面：标签栏和「+」在那里没有意义，整条隐藏
@@ -328,6 +438,7 @@ function showView(v) {
   settingsEl.classList.toggle('hidden', v !== 'settings');
   aboutEl.classList.toggle('hidden', v !== 'about');
   terminalsEl.style.visibility = v === 'term' ? 'visible' : 'hidden';
+  renderNav();
 
   if (v === 'term') {
     const s = sessions.find((x) => 'term:' + x.id === activeKey) || sessions[sessions.length - 1];
@@ -393,11 +504,20 @@ function renderSidebar() {
   for (const srv of servers) {
     const item = document.createElement('div');
     item.className = 'side-item';
-    item.onclick = () => openSshSession(srv);
-
-    const live = sessions.some(
+    // 已经连着这台服务器就切过去，不再重复开一个终端
+    const liveSession = sessions.find(
       (x) => x.kind === 'ssh' && x.alive && x.server && x.server.id === srv.id
     );
+    item.onclick = () => {
+      if (liveSession) {
+        showView('term');
+        activate(liveSession);
+      } else {
+        openSshSession(srv);
+      }
+    };
+
+    const live = !!liveSession;
     const dot = document.createElement('span');
     dot.className = 'dot' + (live ? ' online' : '');
     const text = document.createElement('span');
@@ -430,7 +550,7 @@ function renderSidebar() {
   if (!servers.length) {
     const hint = document.createElement('div');
     hint.className = 'side-hint';
-    hint.textContent = '还没有服务器，点左下角「设置」添加';
+    hint.textContent = '还没有服务器，点上方「设置」添加';
     serverListEl.appendChild(hint);
   }
 }
@@ -438,6 +558,7 @@ function renderSidebar() {
 function renderAll() {
   renderTabs();
   renderSidebar();
+  renderNav();
   updateStatus();
   updateWelcome();
 }
@@ -1315,6 +1436,8 @@ function openServerModal(server) {
   // 不再提供「自动检测」：必须明确选一个系统，否则远端列目录命令无法确定
   const os = server?.os && server.os !== 'auto' ? server.os : 'linux';
   $('m-os').value = os;
+  // 只有已保存的服务器才有 known_hosts 记录可清
+  $('m-forget-key').classList.toggle('hidden', !server);
   $('m-error').classList.add('hidden');
   setModalBusy(false);
   serverModalEl.classList.remove('hidden');
@@ -1417,6 +1540,25 @@ $('btn-server-add').onclick = () => openServerModal(null);
 $('m-cancel').onclick = closeServerModal;
 $('m-save').onclick = submitServerModal;
 
+/// 清除本机 known_hosts 里这台服务器的指纹。
+/// 连接用 accept-new：第一次自动记录，服务器重装 / 换机器后指纹变了
+/// ssh 会拒绝连接，必须先把旧记录删掉才能重新记录。
+$('m-forget-key').onclick = async () => {
+  const host = $('m-host').value.trim();
+  const portText = $('m-port').value.trim();
+  const port = portText === '' ? 22 : parseInt(portText, 10);
+  if (!host) { $('m-host').focus(); return; }
+  if (!Number.isFinite(port) || port < 1 || port > 65535) return;
+  const label = port === 22 ? host : `${host}:${port}`;
+  if (!confirm(`清除本机 known_hosts 里 ${label} 的主机指纹？\n清除后下次连接会重新记录服务器指纹。`)) return;
+  try {
+    await invoke('forget_host_key', { host, port });
+    alert('已清除主机指纹');
+  } catch (e) {
+    alert('清除失败：' + (e?.message || e));
+  }
+};
+
 serverModalEl.addEventListener('mousedown', (e) => {
   if (e.target.classList.contains('modal-backdrop')) closeServerModal();
 });
@@ -1439,8 +1581,11 @@ $('font-size').oninput = () => {
   applyFontToAll();
 };
 
-$('btn-settings').onclick = () => openSettings();
-$('btn-about').onclick = () => openAbout();
+$('btn-nav-term').onclick = () => showView('term');
+$('btn-nav-settings').onclick = () => openSettings();
+$('btn-nav-about').onclick = () => openAbout();
+// 当前会话卡片：点一下回到终端视图（不会再开新终端）
+$('btn-current').onclick = () => showView('term');
 
 // ---------- 「+」新建菜单 ----------
 function menuItem(label, sub, icon, onClick) {
@@ -1538,7 +1683,10 @@ if (tauriAvailable) {
   listen('term-data', (event) => {
     const { id, data } = event.payload;
     const s = resolveSession(id);
-    if (s) s.term.write(b64decode(data));
+    if (s) {
+      s.lastData = Date.now();
+      s.term.write(b64decode(data));
+    }
   });
   listen('term-exit', (event) => markExited(event.payload.id));
 

@@ -65,6 +65,7 @@ fn main() {
             pty::term_is_alive,
             pty::default_shell,
             pty::ssh_session,
+            ssh::forget_host_key,
             config::servers_list,
             config::servers_save,
             config::ui_settings,

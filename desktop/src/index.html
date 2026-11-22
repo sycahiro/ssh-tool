@@ -19,7 +19,19 @@
         </span>
       </div>
 
-      <nav class="side-nav">
+      <div class="side-main-nav">
+        <button class="side-nav-item" id="btn-nav-term">
+          <img src="./icons/terminal.svg" alt="" width="14" height="14" />终端
+        </button>
+        <button class="side-nav-item" id="btn-nav-settings">
+          <img src="./icons/sliders.svg" alt="" width="14" height="14" />设置
+        </button>
+        <button class="side-nav-item" id="btn-nav-about">
+          <img src="./icons/info.svg" alt="" width="14" height="14" />关于
+        </button>
+      </div>
+
+      <nav class="side-nav" id="side-body">
         <section class="nav-group">
           <div class="nav-label">本机</div>
           <div id="local-list"></div>
@@ -39,18 +51,12 @@
       </nav>
 
       <div class="side-footer">
-        <div class="side-status">
+        <button class="side-status" id="btn-current">
           <span class="status-dot" id="status-dot"></span>
           <span class="side-status-text">
             <small>当前会话</small>
             <span id="status-text">就绪</span>
           </span>
-        </div>
-        <button class="side-manage" id="btn-settings">
-          <img src="./icons/sliders.svg" alt="" width="14" height="14" />设置
-        </button>
-        <button class="side-manage" id="btn-about">
-          <img src="./icons/info.svg" alt="" width="14" height="14" />关于
         </button>
       </div>
     </aside>
@@ -217,6 +223,8 @@
         <p class="modal-error hidden" id="m-error"></p>
       </div>
       <div class="modal-foot">
+        <button class="btn btn-ghost" id="m-forget-key">清除主机指纹</button>
+        <span class="modal-foot-gap"></span>
         <button class="btn" id="m-cancel">取消</button>
         <button class="btn btn-primary" id="m-save">保存</button>
       </div>
