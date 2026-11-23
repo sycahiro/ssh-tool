@@ -513,15 +513,11 @@ input:focus-visible {
 
 .terminals {
   position: absolute;
-  inset: 12px 14px 14px;
-  /* 内边距放在卡片上，而不是 .xterm 的直接父级：
-     FitAddon 按父级 height（border-box）算行数，父级带 padding 会多算一行，
-     导致最下面一行被裁掉。 */
-  padding: 12px 10px 12px 14px;
-  border-radius: 14px;
+  /* 贴满整个区域：不留白边、不圆角、不投影，终端铺到边缘 */
+  inset: 0;
+  padding: 0;
   overflow: hidden;
   background: var(--term-bg);
-  box-shadow: var(--shadow-term);
 }
 .terminal-host {
   position: absolute;

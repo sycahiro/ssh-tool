@@ -266,7 +266,6 @@ async function newLocalSession(shell = 'powershell') {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(host);
-  fit.fit();
 
   const title = shell === 'cmd' ? '命令提示符' : 'PowerShell';
   const session = { id: -1, title, term, el: host, fit, alive: true, kind: 'local', shell, server: null };
@@ -282,6 +281,9 @@ async function newLocalSession(shell = 'powershell') {
   });
 
   activate(session);
+  // host 已可见，此刻 fit 才能得到真实行列数（之前在 display:none 上 fit 是 80×24）
+  fit.fit();
+  attachResizeObserver(session);
 
   if (tauriAvailable) {
     try {
@@ -315,7 +317,6 @@ async function openSshSession(server) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(host);
-  fit.fit();
 
   const title = server.name || server.host;
   const session = { id: -1, title, term, el: host, fit, alive: true, kind: 'ssh', server };
@@ -331,6 +332,11 @@ async function openSshSession(server) {
   });
 
   activate(session);
+  // host 已可见，先同步 fit 出真实行列数，再用它建 PTY。
+  // 不能用 activate 里那个 requestAnimationFrame 的 fit：那是异步的，
+  // 这里读 term.cols 时还没跑，会拿到默认的 80×24。
+  fit.fit();
+  attachResizeObserver(session);
   term.writeln(`\x1b[90m正在连接 ${server.user}@${server.host}:${server.port} ...\x1b[0m`);
 
   if (tauriAvailable) {
@@ -345,6 +351,8 @@ async function openSshSession(server) {
       });
       if (session.id === -1) session.id = id;
       if (activeKey === 'term:-1') activeKey = 'term:' + id;
+      // 建好会话后再确认一次尺寸与后端一致
+      syncTerminalSize(session);
       renderAll();
     } catch (e) {
       term.writeln('\x1b[31m连接失败: ' + e + '\x1b[0m');
@@ -354,9 +362,40 @@ async function openSshSession(server) {
   renderAll();
 }
 
+/// 把某个会话重新 fit 到当前可见尺寸，并把真实 cols/rows 同步给后端 PTY。
+/// 关键：必须在 host 已经 .visible（有实际宽高）之后再调用，否则 fit 算出来
+/// 还是默认的 80×24，后端按错误尺寸建 PTY，top/nvidia-smi/lscpu 这类会读取
+/// 终端行列数的程序就会按 24 行排版，溢出到光标下方、互相重叠。
+function syncTerminalSize(session) {
+  if (!session || session.id < 0) return;
+  session.fit.fit();
+  invoke('term_resize', { id: session.id, cols: session.term.cols, rows: session.term.rows }).catch(noop);
+}
+
+/// 给终端容器挂 ResizeObserver（业界标准做法）：容器尺寸一变（首次显示、
+/// 切标签、窗口缩放、改字号）就防抖 fit；fit 改变行列时 term.onResize 触发，
+/// 由 onResize 把新尺寸发给后端。这样后端 PTY 的行列始终等于前端实际渲染值，
+/// 根治 top/nvidia-smi/lscpu 这类读终端尺寸的程序按错误行数排版的问题。
+function attachResizeObserver(session) {
+  let timer = 0;
+  const ro = new ResizeObserver(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      // display:none 时容器尺寸为 0，fit 会跳过；只有可见时才同步
+      if (!session.el.classList.contains('visible')) return;
+      session.fit.fit();
+      // onResize 已负责发 term_resize；这里兜底一次确保后端跟上
+      syncTerminalSize(session);
+    }, 100);
+  });
+  ro.observe(session.el);
+  session.resizeObserver = ro;
+}
+
 function closeSession(session) {
   const i = sessions.indexOf(session);
   if (i < 0) return;
+  session.resizeObserver?.disconnect();
   session.term.dispose();
   session.el.remove();
   sessions.splice(i, 1);
@@ -382,7 +421,10 @@ function activate(session) {
   aboutEl.classList.add('hidden');
   terminalsEl.style.visibility = 'visible';
   requestAnimationFrame(() => {
+    // host 此刻已可见：重新 fit 并把真实尺寸同步给后端，
+    // 否则切换标签后 PTY 还停留在上一个标签的行列数
     session.fit.fit();
+    syncTerminalSize(session);
     session.term.focus();
   });
   renderAll();
@@ -531,6 +573,21 @@ function renderSidebar() {
     text.append(name, sub);
     item.title = live ? '已连接，点击切换' : '未连接，点击打开终端';
 
+    // 新建该服务器的终端：与文件传输按钮并列。
+    // 整行点击在已连接时是「切换」，所以再开一个必须给独立按钮。
+    const newTermBtn = document.createElement('button');
+    newTermBtn.className = 'side-act';
+    newTermBtn.title = `新建终端 · ${srv.name || srv.host}`;
+    newTermBtn.innerHTML =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="1.5" y="2.5" width="9" height="8" rx="1.5"/>' +
+      '<path d="M3.8 5.2 5.4 6.6 3.8 8"/><path d="M6.8 8.2h2.2"/>' +
+      '<path d="M12.5 11v4M10.5 13h4"/></svg>';
+    newTermBtn.onclick = (e) => {
+      e.stopPropagation();
+      openSshSession(srv);
+    };
+
     // 文件传输：只给服务器行，本机没有；点哪台就开哪台自己的子窗口
     const transferBtn = document.createElement('button');
     transferBtn.className = 'side-act';
@@ -544,7 +601,7 @@ function renderSidebar() {
       openTransferWindow(srv);
     };
 
-    item.append(dot, text, transferBtn);
+    item.append(dot, text, newTermBtn, transferBtn);
     serverListEl.appendChild(item);
   }
   if (!servers.length) {
@@ -1342,7 +1399,9 @@ function applyFontToAll() {
   for (const s of sessions) {
     s.term.options.fontFamily = fontStack(settings.font);
     s.term.options.fontSize = settings.fontSize;
-    s.fit.fit();
+    // 只有当前可见的会话能 fit 出正确尺寸（其余 display:none，fit 会跳过），
+    // 切到它们时 activate 会再补一次
+    if ('term:' + s.id === activeKey && settings.view === 'term') syncTerminalSize(s);
   }
 }
 
